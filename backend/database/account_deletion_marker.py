@@ -16,6 +16,26 @@ from database.account_deletion_policy import normalize_account_deletion_status
 from database.firestore_read_metrics import FirestoreReadOutcome, FirestoreReadSite, record_document_read
 
 ACCOUNT_DELETION_COLLECTION = "account_deletions"
+_UID_MAX_LENGTH = 128
+
+
+def _validate_uid(uid: str) -> str:
+    """Return *uid* if it is a safe Firestore document id, else raise ValueError.
+
+    ``document(uid)`` treats a ``/`` or ``\\`` as a path separator and rejects a
+    traversal/empty segment outright, so a malformed uid could crash the auth
+    fence or read an unintended document location. The deletion marker is
+    authoritative — an unsafe id is rejected before it reaches the path.
+    """
+    if (
+        not isinstance(uid, str)
+        or not uid.strip()
+        or len(uid) > _UID_MAX_LENGTH
+        or any(c in uid for c in ('/', '\\', '\x00', '\r', '\n'))
+        or '..' in uid
+    ):
+        raise ValueError('invalid uid for account deletion lookup')
+    return uid
 
 
 def account_deletion_firestore_client(*, firestore_client: Any | None = None) -> Any:
@@ -35,11 +55,21 @@ def account_deletion_collection(*, firestore_client: Any | None = None) -> Any:
 
 
 def account_deletion_document(uid: str, *, firestore_client: Any | None = None) -> Any:
-    return account_deletion_collection(firestore_client=firestore_client).document(uid)
+    return account_deletion_collection(firestore_client=firestore_client).document(_validate_uid(uid))
 
 
 def get_user_deletion_wipe_status(uid: str, *, firestore_client: Any | None = None) -> str | None:
-    """Negative-only cache, generation-fenced by every marker writer."""
+    """Negative-only cache, generation-fenced by every marker writer.
+
+    A malformed uid cannot carry a deletion marker: validation runs before
+    ``memo()`` so a bad uid never becomes a cache key, and it fails open to
+    ``None`` (bypassing the fence) rather than raising inside the read path.
+    """
+    try:
+        uid = _validate_uid(uid)
+    except ValueError:
+        # Invalid uid (non-str, empty, traversal, separator, control char): no marker.
+        return None
     client = account_deletion_firestore_client(firestore_client=firestore_client)
     return memo(
         uid,
