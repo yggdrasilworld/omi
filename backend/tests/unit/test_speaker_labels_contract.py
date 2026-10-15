@@ -462,6 +462,14 @@ def test_voice_matches_preserves_legacy_person_ids(client, monkeypatch, document
     assert seen == [document_id]
 
 
+@pytest.mark.parametrize('bad', ['x' * 1501, 'é' * 751, '__reserved__'])
+def test_voice_matches_rejects_invalid_person_id(client, bad):
+    # _valid_document_id keeps legacy shapes (spaces, backslashes, dots) — only
+    # ids that violate Firestore's storage contract get the 422, before any db
+    # call is attempted.
+    assert client.get(f'/v1/users/people/{quote(bad, safe="")}/voice-matches').status_code == 422
+
+
 def test_voice_matches_unexpected_error_returns_sanitized_500(client, monkeypatch):
     async def raise_boom(uid, pid):
         raise RuntimeError('pinecone namespace users/u1 detail')
