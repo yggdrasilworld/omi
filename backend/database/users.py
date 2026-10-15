@@ -925,7 +925,7 @@ def claim_deletion_wipe_for_task(uid: str, running_stale_after: timedelta = DELE
 
 def create_person(uid: str, data: dict):
     people_ref = db.collection('users').document(uid).collection('people')
-    people_ref.document(data['id']).set(data)
+    people_ref.document(data['id']).set({**data, 'is_user_created': True})
     return data
 
 
@@ -995,9 +995,11 @@ def get_people_by_ids(uid: str, person_ids: list[str]):
     return all_people
 
 
-def update_person(uid: str, person_id: str, name: str) -> bool:
+def update_person(uid: str, person_id: str, name: str, *, expected_chat_state: dict | None = None) -> bool:
     """Rename a stable person and retain old names as owner-scoped aliases."""
 
+    if expected_chat_state is not None:
+        return rename_person_retaining_aliases(db, uid, person_id, name, expected_chat_state=expected_chat_state)
     return rename_person_retaining_aliases(db, uid, person_id, name)
 
 

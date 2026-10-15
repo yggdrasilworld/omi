@@ -22,6 +22,7 @@ from utils.notifications import (
 )
 from utils.conversations.render import format_local_time, resolve_display_tz
 from utils.retrieval.chat_scope import apply_chat_scope_dates, chat_scope_from_config
+from utils.retrieval.turn_refs import register_record_ref, resolve_edit_ref
 import logging
 
 logger = logging.getLogger(__name__)
@@ -332,9 +333,12 @@ def get_action_items_tool(
     except Exception as tz_error:
         logger.warning(f"get_action_items_tool - timezone lookup failed, formatting in UTC: {tz_error}")
         display_tz, tz_label = timezone.utc, "UTC"
-    result = f"User Action Items ({len(action_items)} shown):\n\n"
+    header = f"User Action Items ({len(action_items)} shown):\n\n"
+    result = header
+    shown = 0
 
     for i, item in enumerate(action_items, 1):
+        previous_result = result
         status = "✅ Completed" if item.get('completed', False) else "⬜ Pending"
         result += f"{i}. [{status}] {item.get('description', 'No description')}\n"
 
@@ -355,8 +359,18 @@ def get_action_items_tool(
             result += f"   From conversation: {item['conversation_id']}\n"
 
         result += "\n"
+        if len(result) > MAX_RESULT_CHARS:
+            result = previous_result
+            results_truncated = True
+            break
+        register_record_ref(configurable, 'tasks', item.get('id'))
+        shown += 1
+        channel_items = configurable.get('channel_items')
+        if item.get('id') and isinstance(channel_items, list):
+            channel_items.append({'kind': 'task', 'id': item['id'], 'title': item.get('description', 'Task')})
 
-    logger.info(f"✅ get_action_items_tool END - returning {len(action_items)} items")
+    result = f"User Action Items ({shown} shown):\n\n" + result[len(header) :]
+    logger.info(f"✅ get_action_items_tool END - returning {shown} items")
     return _bounded_action_items_result(result.strip(), results_truncated)
 
 
@@ -547,10 +561,13 @@ def update_action_item_tool(
     completed: Optional[bool] = None,
     description: Optional[str] = None,
     due_at: Optional[str] = None,
+    delete: bool = False,
+    clear_due_date: bool = False,
     config: RunnableConfig = None,  # type: ignore[reportAssignmentType]  # langchain injects at runtime; None default for direct calls
 ) -> str:
     """
-    Update an action item's status, description, or due date.
+    Update or soft-delete a task only when the user asks or confirms a proposed correction.
+    Deletion is reversible. clear_due_date removes a due date.
 
     Use this tool when:
     - User asks to mark a task as complete/done
@@ -613,6 +630,11 @@ def update_action_item_tool(
         return "Error: User ID not found in configuration"
 
     # Check if action item exists
+    resolved_id, ref_error = resolve_edit_ref(configurable, 'tasks', action_item_id, parameter='action_item_id')
+    if ref_error:
+        return ref_error
+    assert resolved_id is not None
+    action_item_id = resolved_id
     existing_item = action_items_db.get_action_item(uid, action_item_id)
     if not existing_item:
         return f"Error: Action item with ID '{action_item_id}' not found. Please use get_action_items_tool first to get the correct ID."
@@ -620,6 +642,13 @@ def update_action_item_tool(
     # Prepare update data
     update_data: Dict[str, Any] = {}
     changes: List[str] = []
+
+    if delete:
+        update_data.update(deleted=True, deleted_at=datetime.now(timezone.utc))
+        changes.append('deleted')
+    if clear_due_date:
+        update_data['due_at'] = None
+        changes.append('due date removed')
 
     if completed is not None:
         update_data['completed'] = completed
@@ -660,9 +689,15 @@ def update_action_item_tool(
     if not update_data:
         return "No changes specified. Please provide at least one field to update (completed, description, or due_at)."
 
+    # Import mutation storage only for writes; retrieval and tool schemas need no client.
+    from database import chat_edits
+    from database.chat_edits import envelope
+
     # Update the action item
     try:
-        success = action_items_db.update_action_item(uid, action_item_id, update_data)
+        before_snapshot = chat_edits.snapshot(uid, 'task', action_item_id)
+        write_state = {'before': before_snapshot}
+        success = action_items_db.update_action_item(uid, action_item_id, update_data, expected_chat_state=write_state)
         if not success:
             return f"Error: Failed to update action item with ID '{action_item_id}'."
 
@@ -674,7 +709,13 @@ def update_action_item_tool(
             return f"Successfully updated action item '{action_item_id}', but couldn't retrieve details."
         result = f"Successfully updated action item: {updated_item.get('description', 'Unknown')}\n"
         result += f"Changes: {', '.join(changes)}"
-        result += record_write(uid, 'task', action_item_id, existing_item, updated_item)
+        result += record_write(
+            uid,
+            'task',
+            action_item_id,
+            envelope(before_snapshot, existing_item.get('description', 'Task')),
+            envelope(write_state['after'], updated_item.get('description', 'Task')),
+        )
 
         # Send notification if item was marked as completed
         if completed is True:
@@ -686,7 +727,7 @@ def update_action_item_tool(
 
         # Reconcile the scheduled reminder to match the new state — cancel on completion, (re)schedule
         # only for an open task with a due date (#5085).
-        if 'completed' in update_data or 'due_at' in update_data:
+        if 'completed' in update_data or 'due_at' in update_data or 'deleted' in update_data:
             try:
                 sync_action_item_reminder(
                     uid,
