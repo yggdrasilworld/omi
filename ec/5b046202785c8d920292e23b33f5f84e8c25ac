@@ -1,0 +1,14 @@
+backend/tests/unit/test_speaker_labels_contract.py
+  h_d2833f622cce50 465-472
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ec5b046202785c8d920292e23b33f5f84e8c25ac",
+  "prompts": {},
+  "humans": {
+    "h_d2833f622cce50": {
+      "author": "Your Name <you@example.com>"
+    }
+  }
+}
