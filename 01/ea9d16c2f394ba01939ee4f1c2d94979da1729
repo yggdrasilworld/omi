@@ -1,0 +1,16 @@
+backend/tests/unit/test_limitless_macos_zip.py
+  h_d2833f622cce50 20,57
+backend/utils/imports/limitless.py
+  h_d2833f622cce50 66-80,346
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "01ea9d16c2f394ba01939ee4f1c2d94979da1729",
+  "prompts": {},
+  "humans": {
+    "h_d2833f622cce50": {
+      "author": "Your Name <you@example.com>"
+    }
+  }
+}
