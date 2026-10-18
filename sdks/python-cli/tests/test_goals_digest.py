@@ -33,6 +33,17 @@ DONE = {
     "is_active": True,
 }
 QUAL = {"id": "g3", "title": "Be kind", "goal_type": None, "is_active": False}
+# Real GoalResponse carries the optional nested `metric` alongside the flat
+# released-client aliases — the digest must honor the canonical nested values.
+NESTED = {
+    "id": "g4",
+    "title": "Meditate",
+    "goal_type": "numeric",
+    "current_value": 3.0,
+    "target_value": 10.0,
+    "metric": {"type": "numeric", "current": 3.0, "target": 10.0, "unit": "min"},
+    "is_active": True,
+}
 
 
 def _page(td, payload, name):
@@ -86,6 +97,19 @@ class TestBreakdownStatus(unittest.TestCase):
         self.assertEqual(m.status(DONE), "✅")
         self.assertEqual(m.status(ACTIVE), "🟢")
         self.assertEqual(m.status(QUAL), "⏸")
+
+    def test_nested_metric_honored(self):
+        self.assertAlmostEqual(m.progress(NESTED), 0.3)
+        rows = m.type_breakdown([NESTED])
+        self.assertEqual(rows[0][0], "numeric")
+        self.assertEqual(rows[0][2], "30%")
+        out = m.digest([])
+        self.assertNotIn("Meditate", out)
+        with tempfile.TemporaryDirectory() as td:
+            src = _page(td, {"goals": [NESTED]}, "g.json")
+            dst = str(Path(td) / "d.md")
+            m.convert([src], dst)
+            self.assertIn("3/10 min", Path(dst).read_text())
 
 
 class TestConvert(unittest.TestCase):

@@ -10,7 +10,7 @@ for the initial export.
 Export your goals:
 
 ```sh
-omi --json goal list > goals.json
+omi --json goal list --include-inactive --limit 100 > goals.json
 ```
 
 Check that the command succeeded before converting.

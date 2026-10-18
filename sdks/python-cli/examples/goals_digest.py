@@ -4,7 +4,7 @@
 See goals_digest.md for the full recipe.
 
 Usage:
-    omi --json goal list > goals.json
+    omi --json goal list --include-inactive --limit 100 > goals.json
     python goals_digest.py goals.json [goals2.json ...] omi_goals_digest.md
 
 Accepts one or more export pages; each goal ID is counted once. KPIs cover
@@ -80,9 +80,22 @@ def load(sources: List[str]) -> List[Dict[str, Any]]:
     return list(seen.values())
 
 
+def _metric(item: Dict[str, Any], key: str) -> Any:
+    """GoalResponse nests the categorical + metric under "metric"
+    ({type,current,target,unit}) — read it with a flat-key fallback for
+    exports that already flattened the shape."""
+    metric = item.get("metric")
+    if isinstance(metric, dict) and metric.get(key) is not None:
+        return metric.get(key)
+    flat = item.get(f"{key}_value" if key in ("current", "target") else key)
+    if flat is not None:
+        return flat
+    return item.get("goal_type") if key == "type" else None
+
+
 def progress(item: Dict[str, Any]) -> Optional[float]:
     """Progress ratio toward target; None for qualitative/no-target goals."""
-    cur, target = number(item.get("current_value")), number(item.get("target_value"))
+    cur, target = number(_metric(item, "current")), number(_metric(item, "target"))
     if cur is None or target is None or target == 0:
         return None
     return cur / target
@@ -115,7 +128,7 @@ def type_breakdown(goals: List[Dict[str, Any]]) -> List[tuple]:
     """Rows of (goal_type, count, avg_progress%) sorted by count desc."""
     by_type = defaultdict(list)
     for g in goals:
-        by_type[one_line(g.get("goal_type")) or "qualitative"].append(g)
+        by_type[one_line(_metric(g, "type")) or "qualitative"].append(g)
     rows = []
     for gtype, items in sorted(by_type.items(), key=lambda kv: -len(kv[1])):
         ratios = [p for p in (progress(i) for i in items) if p is not None]
@@ -147,12 +160,12 @@ def digest(sources: List[str]) -> str:
     lines += ["", "## Goals", ""]
     for g in goals:
         title = one_line(g.get("title") or g.get("description")) or "(no title)"
-        cur, target = number(g.get("current_value")), number(g.get("target_value"))
+        cur, target = number(_metric(g, "current")), number(_metric(g, "target"))
         metric = ""
         if cur is not None and target is not None:
             metric = f" — {fmt_num(cur)}/{fmt_num(target)}"
-            if g.get("unit"):
-                metric += f" {one_line(g['unit'])}"
+            if _metric(g, "unit"):
+                metric += f" {one_line(_metric(g, 'unit'))}"
         lines.append(f"- {status(g)} **{title}**{metric}")
     return "\n".join(lines) + "\n"
 
